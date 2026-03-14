@@ -1,0 +1,14 @@
+{
+  "name": "skyskins-data",
+  "version": "1.0.0",
+  "description": "Scrapes and formats Hypixel SkyBlock skins for SkySkins.github.io",
+  "main": "run_pipeline.js",
+  "scripts": {
+    "sync": "node sync.js",
+    "bundle": "node index_builder.cjs",
+    "build": "pnpm run sync && pnpm run bundle"
+  },
+  "dependencies": {
+    "luaparse": "^0.3.1"
+  }
+}
