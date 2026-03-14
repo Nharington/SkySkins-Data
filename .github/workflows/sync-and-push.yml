@@ -39,6 +39,14 @@ jobs:
       - name: Copy Built Assets to Target Repo
         run: |
           rm -rf target-repo/public/assets/pets
+          rm -rf target-repo/public/assets/dyes
+          rm -rf target-repo/public/assets/helmets
+          rm -rf target-repo/public/assets/dye_data
+          rm -rf target-repo/public/assets/skull_cosmetics
+          rm -rf target-repo/public/assets/skull_cosmetic_data
+          rm -f target-repo/public/assets/dyes.json
+          rm -f target-repo/public/assets/helmets.json
+          rm -f target-repo/public/assets/skull_cosmetics.json
           mkdir -p target-repo/public/assets/
           cp -r dist/public/assets/* target-repo/public/assets/
 

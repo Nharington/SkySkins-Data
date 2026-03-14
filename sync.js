@@ -10,6 +10,11 @@ const REPO_URL =
   "https://github.com/NotEnoughUpdates/NotEnoughUpdates-REPO.git";
 const LOCAL_REPO_PATH = path.resolve(__dirname, "NEU-repo");
 const OUTPUT_BASE = path.resolve(__dirname, "data/pets");
+const DYES_OUTPUT_BASE = path.resolve(__dirname, "data/dyes");
+const SKULL_COSMETICS_OUTPUT_BASE = path.resolve(
+  __dirname,
+  "data/skull_cosmetics",
+);
 
 function cleanText(text) {
   if (!text) return "";
@@ -18,6 +23,11 @@ function cleanText(text) {
     .replace(/_/g, " ")
     .toUpperCase()
     .trim();
+}
+
+function stripFormatting(text) {
+  if (!text) return "";
+  return String(text).replace(/§./g, "").trim();
 }
 
 async function downloadFandomData() {
@@ -80,15 +90,21 @@ function syncNeuRepo() {
   if (fs.existsSync(LOCAL_REPO_PATH)) {
     console.log("Updating existing NEU-repo...");
     try {
-      execSync("git pull", { cwd: LOCAL_REPO_PATH, stdio: "pipe" });
+      execSync("git pull --ff-only", {
+        cwd: LOCAL_REPO_PATH,
+        stdio: "pipe",
+      });
     } catch {
       console.log("Git update skipped. Using local repo.");
     }
   } else {
     console.log("Cloning NEU-repo...");
-    execSync(`git clone --depth 1 ${REPO_URL} "${LOCAL_REPO_PATH}"`, {
-      stdio: "inherit",
-    });
+    execSync(
+      `git clone --depth 1 --branch master --single-branch ${REPO_URL} "${LOCAL_REPO_PATH}"`,
+      {
+        stdio: "inherit",
+      },
+    );
   }
 }
 
@@ -148,11 +164,21 @@ function toTitleCase(str) {
   );
 }
 
-function buildPetStructure() {
+function getNeuItemFiles() {
+  const itemsPath = path.join(LOCAL_REPO_PATH, "items");
+  console.log("Scanning NEU-repo items...");
+  try {
+    return getAllFiles(itemsPath);
+  } catch (e) {
+    console.log("Failed to read NEU-repo items", e);
+    return [];
+  }
+}
+
+function buildPetStructure(allFiles) {
   const petMap = getPetInfoFromLua();
   if (Object.keys(petMap).length === 0) return;
   const allCleanNames = new Set(Object.values(petMap).map((p) => p.cleanName));
-  const itemsPath = path.join(LOCAL_REPO_PATH, "items");
   if (fs.existsSync(OUTPUT_BASE)) {
     fs.rmSync(OUTPUT_BASE, { recursive: true, force: true });
   }
@@ -170,13 +196,6 @@ function buildPetStructure() {
     );
   } else {
     console.log("Warning: animatedskulls.json not found in NEU clone.");
-  }
-  console.log("Scanning NEU-repo for multi-ID assets...");
-  let allFiles = [];
-  try {
-    allFiles = getAllFiles(itemsPath);
-  } catch (e) {
-    console.log("Failed to read NEU-repo items", e);
   }
   for (const [folderName, info] of Object.entries(petMap)) {
     const petFolder = path.join(
@@ -261,10 +280,86 @@ function buildPetStructure() {
   console.log(`\nFINISHED! Check the '${OUTPUT_BASE}' directory.`);
 }
 
+function isDyeItem(data) {
+  const displayName = stripFormatting(data.displayname || data.name || "");
+  const internalName = String(data.internalname || "").toUpperCase();
+  return displayName.toUpperCase().includes("DYE") || internalName.includes("DYE");
+}
+
+function isSkullCosmeticSkinItem(data) {
+  const displayName = stripFormatting(data.displayname || data.name || "");
+  const loreBlob = cleanText((data.lore || []).join(" "));
+  const upperDisplayName = displayName.toUpperCase();
+
+  return (
+    data.itemid === "minecraft:skull" &&
+    upperDisplayName.includes("SKIN") &&
+    !upperDisplayName.includes("MINION") &&
+    loreBlob.includes("COSMETIC")
+  );
+}
+
+function buildDyeStructure(allFiles) {
+  if (fs.existsSync(DYES_OUTPUT_BASE)) {
+    fs.rmSync(DYES_OUTPUT_BASE, { recursive: true, force: true });
+  }
+  fs.mkdirSync(DYES_OUTPUT_BASE, { recursive: true });
+
+  let dyeCount = 0;
+  for (const filePath of allFiles) {
+    try {
+      const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      if (!isDyeItem(data)) continue;
+      const texUrl = extractTextureUrl(data);
+      if (!texUrl) continue;
+
+      const fileName = path.basename(filePath).toLowerCase();
+      const outputPath = path.join(DYES_OUTPUT_BASE, fileName);
+      fs.copyFileSync(filePath, outputPath);
+      dyeCount++;
+    } catch {
+      continue;
+    }
+  }
+
+  console.log(`Exported ${dyeCount} dye items to '${DYES_OUTPUT_BASE}'.`);
+}
+
+function buildSkullCosmeticStructure(allFiles) {
+  if (fs.existsSync(SKULL_COSMETICS_OUTPUT_BASE)) {
+    fs.rmSync(SKULL_COSMETICS_OUTPUT_BASE, { recursive: true, force: true });
+  }
+  fs.mkdirSync(SKULL_COSMETICS_OUTPUT_BASE, { recursive: true });
+
+  let cosmeticCount = 0;
+  for (const filePath of allFiles) {
+    try {
+      const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      if (!isSkullCosmeticSkinItem(data)) continue;
+      const texUrl = extractTextureUrl(data);
+      if (!texUrl) continue;
+
+      const fileName = path.basename(filePath).toLowerCase();
+      const outputPath = path.join(SKULL_COSMETICS_OUTPUT_BASE, fileName);
+      fs.copyFileSync(filePath, outputPath);
+      cosmeticCount++;
+    } catch {
+      continue;
+    }
+  }
+
+  console.log(
+    `Exported ${cosmeticCount} skull cosmetic skin items to '${SKULL_COSMETICS_OUTPUT_BASE}'.`,
+  );
+}
+
 async function main() {
   await downloadFandomData();
   syncNeuRepo();
-  buildPetStructure();
+  const allFiles = getNeuItemFiles();
+  buildPetStructure(allFiles);
+  buildDyeStructure(allFiles);
+  buildSkullCosmeticStructure(allFiles);
 }
 
 main();

@@ -4,6 +4,8 @@ const http = require("http");
 
 const DATA_FILE = path.join(__dirname, "data/pets/Data.json");
 const PETS_DIR = path.join(__dirname, "data/pets");
+const DYES_DIR = path.join(__dirname, "data/dyes");
+const SKULL_COSMETICS_DIR = path.join(__dirname, "data/skull_cosmetics");
 const ANIMATED_SKULLS_FILE = path.join(__dirname, "data/animatedskulls.json");
 const CUSTOM_ANIMATED_FILE = path.join(
   __dirname,
@@ -15,11 +17,18 @@ const OUTPUT_REGISTRY = path.join(
   "dist/public/assets/registry.json",
 );
 const OUTPUT_DATA_DIR = path.join(__dirname, "dist/public/assets/pet_data");
+const OUTPUT_DYE_REGISTRY = path.join(__dirname, "dist/public/assets/dyes.json");
+const OUTPUT_HELMET_REGISTRY = path.join(
+  __dirname,
+  "dist/public/assets/helmets.json",
+);
 const PUBLIC_DEFAULTS = path.join(
   __dirname,
   "dist/public/assets/pets/defaults",
 );
 const PUBLIC_SKINS = path.join(__dirname, "dist/public/assets/pets/skins");
+const PUBLIC_DYES = path.join(__dirname, "dist/public/assets/dyes/skins");
+const PUBLIC_HELMETS = path.join(__dirname, "dist/public/assets/helmets/skins");
 const PUBLIC_ANIMATED = path.join(
   __dirname,
   "dist/public/assets/pets/skins/animated_skins",
@@ -194,6 +203,10 @@ function decodeNbtAndGetTextureUrl(nbtString) {
   }
 }
 
+function stripFormatting(text) {
+  return String(text || "").replace(/§[0-9a-fk-or]/gi, "").trim();
+}
+
 function parsePetInfo(nbtString) {
   try {
     const match = nbtString.match(/petInfo:"(\{.*?\})"/);
@@ -269,14 +282,134 @@ function cleanLore(loreArray, luaPetData, tierName) {
   return joined;
 }
 
+function extractHexColor(loreArray) {
+  for (const line of loreArray || []) {
+    const match = line.match(/#([0-9a-f]{6})/i);
+    if (match) return `#${match[1].toUpperCase()}`;
+  }
+  return null;
+}
+
+function getHelmetCategory(name) {
+  if (name.includes("Power Orb")) return "Power Orb";
+  if (name.includes("Backpack Skin")) return "Backpack";
+  if (name.includes("Greenhouse Skin")) return "Greenhouse";
+  if (name.includes("Barn Skin")) return "Barn";
+  return "Helmet";
+}
+
+async function generateVariantManifest(
+  sourceDir,
+  outputFile,
+  publicDir,
+  assetBasePath,
+  options = {},
+) {
+  if (!fs.existsSync(sourceDir)) {
+    console.warn("Variant source directory not found at", sourceDir);
+    return;
+  }
+
+  const excludeIds = options.excludeIds || new Set();
+  const getCategory = options.getCategory;
+  const variants = [];
+  const files = fs
+    .readdirSync(sourceDir)
+    .filter((file) => file.endsWith(".json"))
+    .sort();
+
+  for (const file of files) {
+    const content = JSON.parse(fs.readFileSync(path.join(sourceDir, file), "utf8"));
+    const textureUrl = decodeNbtAndGetTextureUrl(content.nbttag);
+    if (!textureUrl) continue;
+
+    let localPath = textureUrl;
+    const hash = getTextureHash(textureUrl);
+    if (hash) {
+      const relativePath = `${assetBasePath}/${hash}.png`;
+      const downloaded = await ensureTextureDownloaded(
+        textureUrl,
+        publicDir,
+        hash,
+        relativePath,
+      );
+      if (downloaded) localPath = downloaded;
+    }
+
+    const internalId = content.internalname || file.replace(".json", "");
+    if (excludeIds.has(internalId)) continue;
+
+    const name = stripFormatting(content.displayname || content.name || internalId);
+    const variant = {
+      id: internalId,
+      name,
+      texturePath: localPath,
+      lore: cleanLore(content.lore, null, null),
+      animated: false,
+    };
+
+    if (getCategory) {
+      variant.category = getCategory(name, content);
+    }
+
+    variants.push(variant);
+  }
+
+  fs.writeFileSync(outputFile, JSON.stringify({ variants }, null, 2));
+}
+
+async function generateDyeIndex() {
+  await generateVariantManifest(
+    DYES_DIR,
+    OUTPUT_DYE_REGISTRY,
+    PUBLIC_DYES,
+    "/assets/dyes/skins",
+  );
+  const dyeCount = fs.existsSync(OUTPUT_DYE_REGISTRY)
+    ? JSON.parse(fs.readFileSync(OUTPUT_DYE_REGISTRY, "utf8")).variants.length
+    : 0;
+  console.log(`Successfully indexed ${dyeCount} dye items.`);
+}
+
+async function generateHelmetIndex(petVariantIds) {
+  await generateVariantManifest(
+    SKULL_COSMETICS_DIR,
+    OUTPUT_HELMET_REGISTRY,
+    PUBLIC_HELMETS,
+    "/assets/helmets/skins",
+    {
+      excludeIds: petVariantIds,
+      getCategory: getHelmetCategory,
+    },
+  );
+  const helmetCount = fs.existsSync(OUTPUT_HELMET_REGISTRY)
+    ? JSON.parse(fs.readFileSync(OUTPUT_HELMET_REGISTRY, "utf8")).variants.length
+    : 0;
+  console.log(`Successfully indexed ${helmetCount} helmet items.`);
+}
+
 async function generateIndex() {
   if (!fs.existsSync(PETS_DIR)) {
     console.error("Pets directory not found at", PETS_DIR);
     return;
   }
 
-  if (!fs.existsSync(OUTPUT_DATA_DIR))
-    fs.mkdirSync(OUTPUT_DATA_DIR, { recursive: true });
+  for (const dir of [
+    OUTPUT_DATA_DIR,
+    PUBLIC_DEFAULTS,
+    PUBLIC_SKINS,
+    PUBLIC_DYES,
+    PUBLIC_HELMETS,
+    PUBLIC_ANIMATED,
+  ]) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  for (const file of [OUTPUT_DYE_REGISTRY, OUTPUT_HELMET_REGISTRY]) {
+    fs.rmSync(file, { force: true });
+  }
+
+  fs.mkdirSync(OUTPUT_DATA_DIR, { recursive: true });
 
   const luaData = getLuaData();
   const animatedSkullsRaw = fs.existsSync(ANIMATED_SKULLS_FILE)
@@ -292,6 +425,7 @@ async function generateIndex() {
     ...(customAnimatedSkullsRaw.skins || customAnimatedSkullsRaw),
   };
 
+  const petVariantIds = new Set();
   const registry = {};
   const petFolders = fs
     .readdirSync(PETS_DIR, { withFileTypes: true })
@@ -409,6 +543,7 @@ async function generateIndex() {
         );
         const rawSkinName = content.displayname || file;
         const internalId = content.internalname || file.replace(".json", "");
+        petVariantIds.add(internalId);
         const cleanedLoreForSkin = cleanLore(content.lore, null, null);
 
         const findAnimKey = (target) => {
@@ -535,6 +670,9 @@ async function generateIndex() {
   console.log(
     `Successfully generated registry and indexed ${Object.keys(registry).length} pets with local textures.`,
   );
+
+  await generateDyeIndex();
+  await generateHelmetIndex(petVariantIds);
 }
 
 generateIndex().catch(console.error);
